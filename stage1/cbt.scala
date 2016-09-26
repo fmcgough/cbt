@@ -83,15 +83,15 @@ object `package`{
       enabledLoggers.to,
       startCompat,
       cbtHasChangedCompat,
-      version.getOrElse(null),
-      scalaVersion.getOrElse(null),
+      version.orNull,
+      scalaVersion.orNull,
       permanentKeys,
       permanentClassLoaders,
       cache,
       cbtHome,
       cbtRootHome,
       compatibilityTarget,
-      parentBuild.getOrElse(null)
+      parentBuild.orNull
     )
   }
 }

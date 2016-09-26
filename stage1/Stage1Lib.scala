@@ -158,7 +158,7 @@ class Stage1Lib( val logger: Logger ) extends BaseLib{
           zincDeps
             .collect{ case d @
               BoundMavenDependency(
-                _, _, MavenDependency( "com.typesafe.sbt", "sbt-interface", _, Classifier.none), _
+                _, _, MavenDependency( "com.typesafe.sbt", "sbt-interface", _, Classifier.none, _), _
               ) => d
             }
             .headOption
@@ -169,7 +169,7 @@ class Stage1Lib( val logger: Logger ) extends BaseLib{
           zincDeps
             .collect{ case d @
               BoundMavenDependency(
-                _, _, MavenDependency( "com.typesafe.sbt", "compiler-interface", _, Classifier.sources), _
+                _, _, MavenDependency( "com.typesafe.sbt", "compiler-interface", _, Classifier.sources, _), _
               ) => d
             }
             .headOption

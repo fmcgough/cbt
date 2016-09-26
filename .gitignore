@@ -12,3 +12,4 @@ realpath/realpath
 node_modules
 *fastopt*
 *fullopt*
+*.iml

@@ -6,6 +6,7 @@ import java.io._
 import scala.xml._
 import scala.concurrent._
 import scala.concurrent.duration._
+import scala.util.matching.Regex
 
 abstract class DependencyImplementation extends Dependency{
   implicit protected def logger: Logger
@@ -175,6 +176,20 @@ object Classifier{
   object javadoc extends Classifier(Some("javadoc"))
   object sources extends Classifier(Some("sources"))
 }
+
+case class TransitiveScope(name: Option[String])
+object TransitiveScope {
+
+  /** By default, only transitive dependencies with a scope of 'compile' are included. */
+  object default extends TransitiveScope(None)
+
+  /**
+    * Transitive dependencies with a scope of 'runtime' or 'compile' will be included.
+    * Use this for dependencies used in running tests, or in running a build.
+    */
+  object runtime extends TransitiveScope(Some("runtime"))
+}
+
 abstract class DependenciesProxy{
 
 }
@@ -184,20 +199,21 @@ class BoundMavenDependencies(
   mavenDependencies.map( BoundMavenDependency(cbtHasChanged,mavenCache,_,urls) )
 )
 case class MavenDependency(
-  groupId: String, artifactId: String, version: String, classifier: Classifier = Classifier.none
+  groupId: String, artifactId: String, version: String, classifier: Classifier = Classifier.none, transitiveScope: TransitiveScope = TransitiveScope.default
 ){
   private[cbt] def serialize = groupId ++ ":" ++ artifactId ++ ":"++ version ++ classifier.name.map(":" ++ _).getOrElse("")
 }
 object MavenDependency{
-  private[cbt] def deserialize = (_:String).split(":") match {
-    case col => MavenDependency( col(0), col(1), col(2), Classifier(col.lift(3)) )
+  private[cbt] def deserialize(transitiveScope: TransitiveScope = TransitiveScope.default)
+                              (str: String) = str.split(":") match {
+    case col => MavenDependency( col(0), col(1), col(2), Classifier(col.lift(3)), transitiveScope )
   }
 }
 // FIXME: take MavenResolver instead of mavenCache and repositories separately
 case class BoundMavenDependency(
   cbtHasChanged: Boolean, mavenCache: File, mavenDependency: MavenDependency, repositories: Seq[URL]
 )(implicit val logger: Logger) extends DependencyImplementation with ArtifactInfo{
-  val MavenDependency( groupId, artifactId, version, classifier ) = mavenDependency
+  val MavenDependency( groupId, artifactId, version, classifier, transitiveScope ) = mavenDependency
   assert(
     Option(groupId).collect{
       case BoundMavenDependency.ValidIdentifier(_) =>
@@ -278,15 +294,13 @@ case class BoundMavenDependency(
     }.flatMap(_.transitivePom) :+ this
   }
 
-  private lazy val properties: Map[String, String] = (
-    transitivePom.flatMap{ d =>
-      val props = (d.pomXml \ "properties").flatMap(_.child).map{
-        tag => tag.label -> tag.text
-      }
-      logger.pom(s"Found properties in $pom: $props")
-      props
+  private lazy val properties: Map[String, String] = transitivePom.flatMap{ d =>
+    val props = (d.pomXml \ "properties").flatMap(_.child).map{
+      tag => tag.label -> tag.text
     }
-  ).toMap
+    logger.pom(s"Found properties in $pom: $props")
+    props
+  }.toMap
 
   private lazy val dependencyVersions: Map[String, (String,String)] =
     transitivePom.flatMap(
@@ -300,44 +314,47 @@ case class BoundMavenDependency(
       }
     ).toMap
 
+  private def includeTransitiveDependency(xml: Node): Boolean = {
+    val scope = (xml \ "scope").text
+    val optional = (xml \ "optional").text == "true"
+    (scope == "" || scope == "compile" || transitiveScope.name.contains(scope)) && !optional
+  }
+
   def dependencies: Seq[BoundMavenDependency] = {
     if(classifier == Classifier.sources) Seq()
     else {
       lib.cacheOnDisk(
-        cbtHasChanged, mavenCache ++ basePath ++ ".pom.dependencies"
-      )( MavenDependency.deserialize )( _.serialize ){
-        (pomXml \ "dependencies" \ "dependency").collect{
-          case xml if ( (xml \ "scope").text == "" || (xml \ "scope").text == "compile" ) && (xml \ "optional").text != "true" =>
+        cbtHasChanged, mavenCache ++ basePath ++ ".pom.dependencies" ++
+          transitiveScope.name.map("." + _).getOrElse("")
+      )( MavenDependency.deserialize(transitiveScope) )( _.serialize ){
+        (pomXml \ "dependencies" \ "dependency").collect {
+          case xml if includeTransitiveDependency(xml) =>
             val artifactId = lookup(xml,_ \ "artifactId").get
-            val groupId =
-              lookup(xml,_ \ "groupId").getOrElse(
+            val groupId = lookup(xml,_ \ "groupId").getOrElse(
                 dependencyVersions
                   .get(artifactId).map(_._1)
                   .getOrElse(
                     throw new Exception(s"$artifactId not found in \n$dependencyVersions")
                   )
               )
-            val version =
-              lookup(xml,_ \ "version").getOrElse(
+            val version = lookup(xml,_ \ "version").getOrElse(
                 dependencyVersions
                   .get(artifactId).map(_._2)
                   .getOrElse(
                     throw new Exception(s"$artifactId not found in \n$dependencyVersions")
                   )
               )
-            val classifier = Classifier( Some( (xml \ "classifier").text ).filterNot(_ == "").filterNot(_ == null) )
-            MavenDependency( groupId, artifactId, version, classifier )
+            val classifier = Classifier( Option( (xml \ "classifier").text ).filter(_.nonEmpty) )
+            MavenDependency( groupId, artifactId, version, classifier, transitiveScope )
         }.toVector
       }.map(
-        BoundMavenDependency( cbtHasChanged, mavenCache, _, repositories )
+        BoundMavenDependency( cbtHasChanged, mavenCache, _, repositories)
       ).to
     }
   }
   def lookup( xml: Node, accessor: Node => NodeSeq ): Option[String] = {
-    //println("lookup in "++pomUrl)
     val Substitution = "\\$\\{([^\\}]+)\\}".r
     accessor(xml).headOption.map{v =>
-      //println("found: "++v.text)
       Substitution.replaceAllIn(
         v.text,
         matcher => {
@@ -349,11 +366,10 @@ case class BoundMavenDependency(
                   path.foldLeft(d.pomXml:NodeSeq){ case (xml,tag) => xml \ tag }.text
               }.filter(_ != "")
             }.headOption
-          )
+          ).map(Regex.quoteReplacement)
           .getOrElse(
             throw new Exception(s"Can't find $path in \n$properties.\n\npomParents: $transitivePom\n\n pomXml:\n$pomXml" )
           )
-            //println("lookup "++path ++ ": "++(pomXml\path).text)          
         }
       )
     }
@@ -370,7 +386,7 @@ object BoundMavenDependency{
       case (Left(i),Right(j)) => i.toString compare j
       case (Right(i),Left(j)) => i compare j.toString
     }
-    res.find(_ != 0).map(_ < 0).getOrElse(false)
+    res.find(_ != 0).exists(_ < 0)
   }
   def toInt(str: String): Either[Int,String] = try {
     Left(str.toInt)

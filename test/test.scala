@@ -196,6 +196,7 @@ object Main{
     task("fastOptJS","../examples/scalajs-react-example/js")
     task("fullOptJS","../examples/scalajs-react-example/js")
     compile("../examples/uber-jar-example")
+    task("foo", "dependency-scopes")
     
     {
       val res = runCbt("simple", Seq("printArgs","1","2","3"))

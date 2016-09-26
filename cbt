@@ -183,7 +183,7 @@ stage1 () {
 			$NG ng-stop >> $nailgun_out 2>> $nailgun_err &
 			sleep 1
 			echo "Restarting background process (nailgun)" 1>&2
-			ng-server 127.0.0.1:$NAILGUN_PORT >> $nailgun_out 2>> $nailgun_err &
+			$NG_SERVER 127.0.0.1:$NAILGUN_PORT >> $nailgun_out 2>> $nailgun_err &
 			sleep 1
 		fi
 	fi
